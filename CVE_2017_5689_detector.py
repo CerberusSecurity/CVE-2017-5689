@@ -1,0 +1,109 @@
+from socket import *
+import re
+import sys
+import threading
+
+port_list = [16992,16993,16994,16995,623,664]
+
+server_rex = "Server: Intel\(R\) Active Management Technology"
+version_rex = "((11\.(6\.(2(7\.(3(2(6[0-3]|[0-5][0-9])|[01][0-9]{2})|[0-2]?[0-9]?[0-9]?[0-9])|[0-6])|[01]?[0-9])|5|0\.(2(5\.(3000|[0-2]?[0-9]?[0-9]?[0-9])|[0-4])|[01]?[0-9]))|"\
+            "10\.0\.(5(5\.[0-2]?[0-9]?[0-9]?[0-9]|[0-4])|[0-4]?[0-9])|"\
+            "9\.(5\.(6(1\.(30(1[01]|0?[0-9])|[0-2]?[0-9]?[0-9]?[0-9])|0)|[0-5]?[0-9])|1\.(4(1\.(30(2[0-3]|[01][0-9])|[0-2]?[0-9]?[0-9]?[0-9])|0)|[0-3]?[0-9])|0)|"\
+            "8\.(1\.(7(1\.(3(60[0-7]|[0-5][0-9]{2})|[0-2]?[0-9]?[0-9]?[0-9])|0)|[0-6]?[0-9])|0)|"\
+            "7\.(1\.(9(1\.(3(2(7[01]|[0-6][0-9])|[01][0-9]{2})|[0-2]?[0-9]?[0-9]?[0-9])|0)|[0-8]?[0-9])|0)|"\
+            "6\.(2\.(6(1\.(3(5(3[0-4]|[0-2][[0-9])|[0-4][0-9]{2})|[0-2]?[0-9]?[0-9]?[0-9])|0)|[0-5]?[0-9])|[01])))"
+
+banner_rex = "%s %s" % (server_rex, version_rex)
+
+vuln_targets = []
+
+def check_vuln(response):
+        m = re.search(banner_rex, response)
+        if m is None:
+            return False
+
+        return True
+
+def run(host, port):
+    try:
+        s = socket(AF_INET,SOCK_STREAM)
+        s.settimeout(10)
+        s.connect((host, port))
+
+        s.send("GET / HTTP/1.1\r\n\r\n")
+        resp = s.recv(1024)
+        s.close()
+
+        if check_vuln(resp):
+            print "\n[!] %s:%d appears to be vulnerable to CVE-2017-5689" % (host,port)
+            vuln_targets.append("%s:%d" % (host,port))
+
+    except Exception, e:
+        s.close()
+
+def vuln_summary():
+    print "Vulnerable targets:"
+    for vuln in vuln_targets:
+        print vuln
+
+def main(addr, end=0):
+    # get address prefix
+    addr_prefix = addr[0:addr.rfind('.')]
+
+    # get start index of subnet
+    start = int(addr[addr.rfind('.')+1:])
+
+    # if single ip
+    if end == 0:
+        stop = start
+
+    # get stop index of subnet
+    else:
+        stop = int(end)
+
+    # generate target list
+    addresses = []
+    for i in xrange(start, stop+1):
+        addresses.append("%s.%d" % (addr_prefix,i))
+
+    for address in addresses:
+        thread_pool = []
+
+        for port in port_list:
+            print "[+] checking %s:%d" % (address,port)
+
+            t = threading.Thread(target=run, args = (address, port))
+            t.start()
+            thread_pool.append(t)
+
+        # wait for threads to terminate
+        for t in thread_pool:
+            t.join()
+
+        print ""
+
+    vuln_summary()
+
+if __name__=="__main__":
+    # validate ip argument
+    ip_rex = r"^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})(-([0-9]{1,3}))?"
+    m = re.search(ip_rex, sys.argv[1])
+    if m is None:
+        print "Invalid ip address or range"
+        exit(-1)
+
+    first_ip = m.group(1)
+    rng = m.group(3)
+
+    # no range defined, use single ip
+    if rng is None:
+        main(first_ip)
+
+    else:
+        last_octet = first_ip[first_ip.rfind('.')+1:]
+
+        if(int(last_octet) > int(rng)):
+            print "Invalid ip range"
+            exit(-1)
+
+        main(first_ip, rng)
